@@ -1,5 +1,5 @@
 const { exec } = require("child_process");
-const {ethers} = require("hardhat"); // Importing exec from child_process
+const {ethers, network} = require("hardhat"); // Importing exec from child_process
 
 const adminKeyName = "admin"
 
@@ -213,24 +213,14 @@ async function getPointerForCw721(cw721Address) {
 }
 
 async function deployErc20PointerForCw20(provider, cw20Address, attempts=10, from=adminKeyName, evmRpc="") {
-    let command = `seid tx evm register-evm-pointer CW20 ${cw20Address} --from=${from} -b block`
+    let command = `seid tx evm register-evm-pointer CW20 ${cw20Address} --from=${from} -b block --gas-prices=0.2usei`;
     if (evmRpc) {
         command = command + ` --evm-rpc=${evmRpc}`
     }
     const output = await execute(command);
-    const txHash = output.replace(/.*0x/, "0x").trim()
+    const txHash = output.replace(/.*0x/, "0x").trim();
     let attempt = 0;
-    while(attempt < attempts) {
-        const receipt = await provider.getTransactionReceipt(txHash);
-        if(receipt && receipt.status === 1) {
-            return (await getPointerForCw20(cw20Address)).pointer
-        } else if(receipt){
-            throw new Error("contract deployment failed")
-        }
-        await sleep(500)
-        attempt++
-    }
-    throw new Error("contract deployment failed")
+    return await verifyPointerDeployment(provider, txHash, cw20Address, command, attempts, attempt, 'cw20');
 }
 
 async function deployErc20PointerNative(provider, name, from=adminKeyName, evmRpc="") {
@@ -241,15 +231,8 @@ async function deployErc20PointerNative(provider, name, from=adminKeyName, evmRp
     const output = await execute(command);
     const txHash = output.replace(/.*0x/, "0x").trim()
     let attempt = 0;
-    while(attempt < 10) {
-        const receipt = await provider.getTransactionReceipt(txHash);
-        if(receipt) {
-            return (await getPointerForNative(name)).pointer
-        }
-        await sleep(500)
-        attempt++
-    }
-    throw new Error("contract deployment failed")
+    let attempts = 10;
+    return await verifyPointerDeployment(provider, txHash, name, command, attempts, attempt, 'native');
 }
 
 async function deployErc721PointerForCw721(provider, cw721Address, from=adminKeyName, evmRpc="") {
@@ -260,17 +243,8 @@ async function deployErc721PointerForCw721(provider, cw721Address, from=adminKey
     const output = await execute(command);
     const txHash = output.replace(/.*0x/, "0x").trim()
     let attempt = 0;
-    while(attempt < 10) {
-        const receipt = await provider.getTransactionReceipt(txHash);
-        if(receipt && receipt.status === 1) {
-            return (await getPointerForCw721(cw721Address)).pointer
-        } else if(receipt){
-            throw new Error("contract deployment failed")
-        }
-        await sleep(500)
-        attempt++
-    }
-    throw new Error("contract deployment failed")
+    let attempts = 10;
+    return await verifyPointerDeployment(provider, txHash, cw721Address, command, attempts, attempt, 'cw721');
 }
 
 async function deployWasm(path, adminAddr, label, args = {}, from=adminKeyName) {
@@ -310,7 +284,7 @@ async function passProposal(proposalId,  desposit="200000000usei", fees="20000us
     throw new Error("could not pass proposal "+proposalId)
 }
 
-async function registerPointerForERC20(erc20Address, fees="20000usei", from=adminKeyName) {
+async function registerPointerForERC20(erc20Address, fees="25000usei", from=adminKeyName) {
     const command = `seid tx evm register-cw-pointer ERC20 ${erc20Address} --from ${from} --fees ${fees} --broadcast-mode block -y -o json`
     const output = await execute(command);
     const response = JSON.parse(output)
@@ -456,6 +430,44 @@ async function waitForReceipt(txHash) {
         receipt = await ethers.provider.getTransactionReceipt(txHash)
     }
     return receipt
+}
+
+async function verifyPointerDeployment(provider, txHash, address, command, attempts, attempt, contractType){
+    while(attempt < attempts) {
+        const receipt = await provider.getTransactionReceipt(txHash);
+        if(receipt && receipt.status === 1) {
+            if (contractType === 'cw20') {
+                return (await getPointerForCw20(address)).pointer
+            } else if (contractType === 'cw721'){
+                return (await getPointerForCw721(address)).pointer
+            } else {
+                return (await getPointerForNative(address)).pointer
+            }
+        } else if(receipt && receipt.status === 0) {
+            console.log('Deployment failed, retrying one more time');
+            const output = await execute(command);
+            const txHash = output.replace(/.*0x/, "0x").trim()
+            await verifyPointerDeployment(provider, txHash, address, command, attempts, attempt, contractType);
+        }
+        await sleep(500);
+        attempt++
+    }
+    throw new Error('contract deployment failed');
+    // const output = await execute(command);
+    // const hash = output.replace(/.*0x/, "0x").trim()
+    // await sleep(2000);
+    // const receipt = await provider.getTransactionReceipt(hash);
+    // if (!receipt){
+    //     throw new Error("contract deployment failed")
+    // } else {
+    //     if (contractType === 'cw20') {
+    //         return (await getPointerForCw20(address)).pointer
+    //     } else if (contractType === 'cw721'){
+    //         return (await getPointerForCw721(address)).pointer
+    //     } else {
+    //         return (await getPointerForNative(address)).pointer
+    //     }
+    // }
 }
 
 module.exports = {
